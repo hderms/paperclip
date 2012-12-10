@@ -89,6 +89,7 @@ module Paperclip
     # another Paperclip attachment:
     #   new_user.avatar = old_user.avatar
     def assign uploaded_file
+      puts uploaded_file.inspect
       ensure_required_accessors!
       file = Paperclip.io_adapters.for(uploaded_file)
 
