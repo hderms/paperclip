@@ -45,6 +45,7 @@ module Paperclip
     # * +s3_headers+: A hash of headers or a Proc. You may specify a hash such as
     #   {'Expires' => 1.year.from_now.httpdate}. If you use a Proc, headers are determined at
     #   runtime. Paperclip will call that Proc with attachment as the only argument.
+    #   Can be defined both globaly and within a style-specific hash.
     # * +bucket+: This is the name of the S3 bucket that will store your files. Remember
     #   that the bucket must be unique across all of Amazon S3. If the bucket does not exist
     #   Paperclip will attempt to create it. The bucket name will not be interpolated.
@@ -83,7 +84,7 @@ module Paperclip
     # * +s3_metadata+: These key/value pairs will be stored with the
     #   object.  This option works by prefixing each key with
     #   "x-amz-meta-" before sending it as a header on the object
-    #   upload request.
+    #   upload request. Can be defined both globaly and within a style-specific hash.
     # * +s3_storage_class+: If this option is set to
     #   <tt>:reduced_redundancy</tt>, the object will be stored using Reduced
     #   Redundancy Storage.  RRS enables customers to reduce their
@@ -123,26 +124,17 @@ module Paperclip
               (permission == :public_read) ? 'http' : 'https'
             end
           @s3_metadata = @options[:s3_metadata] || {}
-          @s3_headers = @options[:s3_headers] || {}
-          @s3_headers = @s3_headers.call(instance) if @s3_headers.respond_to?(:call)
-          @s3_headers = (@s3_headers).inject({}) do |headers,(name,value)|
-            case name.to_s
-            when /^x-amz-meta-(.*)/i
-              @s3_metadata[$1.downcase] = value
-            else
-              name = name.to_s.downcase.sub(/^x-amz-/,'').tr("-","_").to_sym
-              headers[name] = value
-            end
-            headers
-          end
+          @s3_headers = {}
+          merge_s3_headers(@options[:s3_headers], @s3_headers, @s3_metadata)
 
           @s3_headers[:storage_class] = @options[:s3_storage_class] if @options[:s3_storage_class]
 
+          @s3_server_side_encryption = :aes256
           if @options[:s3_server_side_encryption].blank?
-            @options[:s3_server_side_encryption] = false
+            @s3_server_side_encryption = false
           end
-          if @options[:s3_server_side_encryption]
-            @s3_headers['x-amz-server-side-encryption'] = @options[:s3_server_side_encryption].to_s.upcase
+          if @s3_server_side_encryption
+            @s3_server_side_encryption = @options[:s3_server_side_encryption].to_s.upcase
           end
 
           unless @options[:url].to_s.match(/^:s3.*url$/) || @options[:url] == ":asset_host"
@@ -221,8 +213,13 @@ module Paperclip
             config[opt] = s3_credentials[opt] if s3_credentials[opt]
           end
 
-          AWS::S3.new(config.merge(@s3_options))
+          obtain_s3_instance_for(config.merge(@s3_options))
         end
+      end
+
+      def obtain_s3_instance_for(options)
+        instances = (Thread.current[:paperclip_s3_instances] ||= {})
+        instances[options] ||= AWS::S3.new(options)
       end
 
       def s3_bucket
@@ -306,8 +303,19 @@ module Paperclip
               :content_type => file.content_type,
               :acl => acl
             }
+            if @s3_server_side_encryption
+              write_options[:server_side_encryption] = @s3_server_side_encryption
+            end
+
+            style_specific_options = @options[:styles][style]
+            if style_specific_options.is_a?(Hash)
+              merge_s3_headers( style_specific_options[:s3_headers], @s3_headers, @s3_metadata) if style_specific_options.has_key?(:s3_headers)
+              @s3_metadata.merge!(style_specific_options[:s3_metadata]) if style_specific_options.has_key?(:s3_metadata)
+            end
+
             write_options[:metadata] = @s3_metadata unless @s3_metadata.empty?
             write_options.merge!(@s3_headers)
+
             s3_object(style).write(file, write_options)
           rescue AWS::S3::Errors::NoSuchBucket => e
             create_bucket
@@ -362,6 +370,19 @@ module Paperclip
 
       def use_secure_protocol?(style_name)
         s3_protocol(style_name) == "https"
+      end
+
+      def merge_s3_headers(http_headers, s3_headers, s3_metadata)
+        return if http_headers.nil?
+        http_headers = http_headers.call(instance) if http_headers.respond_to?(:call)
+        http_headers.inject({}) do |headers,(name,value)|
+          case name.to_s
+          when /^x-amz-meta-(.*)/i
+            s3_metadata[$1.downcase] = value
+          else
+            s3_headers[name.to_s.downcase.sub(/^x-amz-/,'').tr("-","_").to_sym] = value
+          end
+        end
       end
     end
   end
