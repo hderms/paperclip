@@ -14,6 +14,7 @@ module Paperclip
 
     def handler_for(target)
       @registered_handlers.each do |tester, handler|
+        debugger
         return handler if tester.call(target)
       end
       raise NoHandlerError.new("No handler found for #{target.inspect}")
