@@ -28,7 +28,9 @@ module Paperclip
       if logging? && (options[:log_command] || local_options[:log_command])
         local_options = local_options.merge(:logger => logger)
       end
-      Cocaine::CommandLine.new(cmd, arguments, local_options).run(interpolation_values)
+      line = Cocaine::CommandLine.new(cmd, arguments, local_options)
+      logger.info line.command
+      line.run(interpolation_values)
     end
 
     # Find all instances of the given Active Record model +klass+ with attachment +name+.
